@@ -6,17 +6,28 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from google import genai
 
-# 環境變數設定
+# 環境變數
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "989667956"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 初始化 Gemini Client
+# 初始化 Gemini
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 對話歷史暫存（讓 AI 聽得懂上下文）
-conversation_history = []
+# 系統人設：專屬副業操盤手與數位商品架構師
+SYSTEM_INSTRUCTION = (
+    "你是一位頂尖的數位商品副業合夥人與自動化架構師。"
+    "你的老闆是 Lucas。你的核心任務是協助他打造高價值、省時間、高轉化的數位商品（SOP、指南、模板、提示詞庫）。"
+    "原則：說話直接切中要點、杜絕廢話套話、擅長市場痛點挖掘、藍海選題、定價策略與直接產出可販售的乾貨內容。"
+)
 
+# 建立全域對話 Session
+chat_session = ai_client.chats.create(
+    model="gemini-3.8-flash",
+    config={"system_instruction": SYSTEM_INSTRUCTION}
+)
+
+# 偽裝 HTTP 伺服器供 Render 檢測 Port
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -30,37 +41,31 @@ def run_http_server():
 
 def get_main_menu():
     keyboard = [
-        [InlineKeyboardButton("💡 今日推薦數位商品選題", callback_data="btn_idea")],
-        [InlineKeyboardButton("📑 生成數位商品完整草稿", callback_data="btn_create_product")],
-        [InlineKeyboardButton("📢 產出社群引流與宣傳文案", callback_data="btn_marketing")]
+        [InlineKeyboardButton("💡 推薦全新藍海選題", callback_data="btn_idea")],
+        [InlineKeyboardButton("📑 將當前共識生成完整可售手冊", callback_data="btn_create_product")],
+        [InlineKeyboardButton("📢 產出高轉換爆款宣傳文案", callback_data="btn_marketing")],
+        [InlineKeyboardButton("🔄 清空上下文 / 開啟新主題", callback_data="btn_reset")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def is_authorized(user_id: int) -> bool:
     return user_id == ALLOWED_USER_ID
 
-def call_gemini(prompt: str) -> str:
-    global conversation_history
-    # 紀錄上下文
-    conversation_history.append({"role": "user", "parts": [{"text": prompt}]})
-    if len(conversation_history) > 10:
-        conversation_history = conversation_history[-10:]
-        
-    response = ai_client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=conversation_history
-    )
-    conversation_history.append({"role": "model", "parts": [{"text": response.text}]})
+# 核心同步呼叫封裝
+def ask_gemini_sync(prompt_text: str) -> str:
+    global chat_session
+    response = chat_session.send_message(prompt_text)
     return response.text
 
-async def send_long_message(message_obj, text: str, reply_markup=None):
+# 智慧長文本分片傳送
+async def safe_reply(message_obj, text: str, reply_markup=None):
     chunk_size = 3500
     if len(text) <= chunk_size:
         await message_obj.reply_text(text, reply_markup=reply_markup)
     else:
-        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-        for i, chunk in enumerate(chunks):
-            if i == len(chunks) - 1:
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
+            if i + chunk_size >= len(text):
                 await message_obj.reply_text(chunk, reply_markup=reply_markup)
             else:
                 await message_obj.reply_text(chunk)
@@ -70,11 +75,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ 未授權存取。")
         return
     await update.message.reply_text(
-        "👋 Lucas，副業自動化指揮中心已就緒！\n你可以直接點選下方按鈕，或『直接打字』給我任何方向建議與指示：",
+        "👋 Lucas，副業自動化指揮中心已就緒！\n\n"
+        "你可以隨時【直接傳文字】進行討論、下達指令，或點選下方快捷按鈕：",
         reply_markup=get_main_menu()
     )
 
-# 處理你輸入的自訂文字指令（做決策、給回饋）
+async def clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    global chat_session
+    chat_session = ai_client.chats.create(
+        model="gemini-3.8-flash",
+        config={"system_instruction": SYSTEM_INSTRUCTION}
+    )
+    await update.message.reply_text("🔄 已重置記憶與上下文，隨時可以開啟全新副業專案！", reply_markup=get_main_menu())
+
+# 文字訊息處理（自然語言對話與決策）
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         return
@@ -82,19 +98,33 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_text = update.message.text
     status_msg = await update.message.reply_text("🧠 正在思考並依據你的決策進行規劃...")
 
-    prompt = (
-        f"你是我的副業專案經理與 AI 執行助手。我的最新指令是：\n『{user_text}』\n\n"
-        "請針對我的要求進行深度分析：\n"
-        "1. 市場藍海與受眾絕對痛點評估（為什麼他們非買不可）。\n"
-        "2. 降價後的最優定價策略（例如 $9 ~ $19 衝量階段）。\n"
-        "3. 依據此方向，輸出該數位商品的詳細章節大綱與製作方案。"
-    )
-
     loop = asyncio.get_running_loop()
-    result_text = await loop.run_in_executor(None, call_gemini, prompt)
-    await status_msg.delete()
-    await send_long_message(update.message, result_text, get_main_menu())
+    try:
+        # 加入 60 秒防超時保護
+        reply_content = await asyncio.wait_for(
+            loop.run_in_executor(None, ask_gemini_sync, user_text),
+            timeout=60.0
+        )
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await safe_reply(update.message, reply_content, get_main_menu())
 
+    except asyncio.TimeoutError:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await update.message.reply_text("⚠️ 請求逾時，請精簡指令或再試一次。", reply_markup=get_main_menu())
+    except Exception as e:
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(f"⚠️ 執行異常：{str(e)}", reply_markup=get_main_menu())
+
+# 按鈕回調邏輯
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -104,60 +134,74 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data
+    global chat_session
+
+    if data == "btn_reset":
+        chat_session = ai_client.chats.create(
+            model="gemini-3.8-flash",
+            config={"system_instruction": SYSTEM_INSTRUCTION}
+        )
+        await query.message.reply_text("🔄 已重置對話記憶！", reply_markup=get_main_menu())
+        return
+
+    status_msg = await query.message.reply_text("⚡ 正在調度 AI 執行指令...")
+    loop = asyncio.get_running_loop()
+
+    if data == "btn_idea":
+        prompt = (
+            "請為數位商品（電子手冊/SOP/範本）分析 3 個高價值的藍海選題：\n"
+            "要求：核心目標必須是幫受眾『節省大量時間』或『翻倍工作/生活效率』。\n"
+            "格式請包含：題目、目標客群痛點、建議售價（美元）、核心章節大綱。"
+        )
+    elif data == "btn_create_product":
+        prompt = (
+            "請將我們目前討論確定的方向，直接生成一份完整、結構嚴謹且含金量極高的『數位手冊內容全本（Markdown格式）』。\n"
+            "要求：\n"
+            "1. 開頭點出痛點與能為讀者省下多少小時。\n"
+            "2. 步驟必須附帶可直接複製貼上的實戰 Prompt 或具體操作 SOP。\n"
+            "3. 確保可以直接打包在 Gumroad 上架販售。"
+        )
+    elif data == "btn_marketing":
+        prompt = (
+            "請依據我們目前的數位商品，撰寫 2 則用於 Threads / X 的高轉化爆款推廣貼文：\n"
+            "貼文 1：痛點戳心切入（沒時間、低效、瞎忙）。\n"
+            "貼文 2：成果展示切入（如何用一套流程省下 80% 時間）。\n"
+            "文末附上明確且強烈的行動呼籲（CTA）。"
+        )
+    else:
+        prompt = "請向我報告當前副業推進狀態。"
 
     try:
-        if data == "btn_idea":
-            status_msg = await query.message.reply_text("🔍 正在分析高價值、幫讀者省時的數位商品題目...")
-            prompt = (
-                "請為數位商品（電子書/SOP/範本手冊）構思 3 個高價值選題。\n"
-                "核心標準：必須能幫受眾『節省時間』或『提高工作與生活效率』，實用性高。\n"
-                "請條列列出：題目名稱、核心目標客群痛點、建議定價（美元）、4 個核心實踐章節。"
-            )
-            loop = asyncio.get_running_loop()
-            result_text = await loop.run_in_executor(None, call_gemini, prompt)
+        reply_content = await asyncio.wait_for(
+            loop.run_in_executor(None, ask_gemini_sync, prompt),
+            timeout=60.0
+        )
+        try:
             await status_msg.delete()
-            await send_long_message(query.message, result_text, get_main_menu())
-
-        elif data == "btn_create_product":
-            status_msg = await query.message.reply_text("✍️ 正在依據目前討論的方向生成數位商品實戰指南草稿...")
-            prompt = (
-                "請依據我們剛才選定的方向（內容一魚多吃 / 提示詞鏈 / 提升效率數位手冊），"
-                "撰寫一份字數約 1200 字、含金量極高的實用手冊內容草稿。\n"
-                "架構要求：\n"
-                "1. 核心邏輯與價值省時試算\n"
-                "2. 實戰 Prompt 模板（讀者可直接複製貼上套用）\n"
-                "3. 跨平台發布的工作流步驟（SOP）\n"
-                "避開套話，以立刻能用的乾貨呈現。"
-            )
-            loop = asyncio.get_running_loop()
-            result_text = await loop.run_in_executor(None, call_gemini, prompt)
+        except Exception:
+            pass
+        await safe_reply(query.message, reply_content, get_main_menu())
+    except asyncio.TimeoutError:
+        try:
             await status_msg.delete()
-            await send_long_message(query.message, result_text, get_main_menu())
-
-        elif data == "btn_marketing":
-            status_msg = await query.message.reply_text("✍️ 正在產出適用於 Threads / X 的高轉換引流貼文...")
-            prompt = (
-                "請依據我們正在製作的數位商品，撰寫 2 篇社群高轉換貼文：\n"
-                "貼文 1（痛點切入）：針對沒時間創作、產出效率低下的創作者/上班族。\n"
-                "貼文 2（成果展示）：說明如何用一套流程將產出效率提升 5 倍。\n"
-                "每篇請包含吸睛開頭（Hook）、乾貨要點與明確的行動呼籲（CTA）。"
-            )
-            loop = asyncio.get_running_loop()
-            result_text = await loop.run_in_executor(None, call_gemini, prompt)
-            await status_msg.delete()
-            await send_long_message(query.message, result_text, get_main_menu())
-
+        except Exception:
+            pass
+        await query.message.reply_text("⚠️ 請求逾時，請重試一次。", reply_markup=get_main_menu())
     except Exception as e:
-        await query.message.reply_text(f"⚠️ 執行發生異常：{str(e)}", reply_markup=get_main_menu())
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        await query.message.reply_text(f"⚠️ 執行異常：{str(e)}", reply_markup=get_main_menu())
 
 def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("clear", clear_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
-    # 新增：接收任意文字訊息
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
-    print("指揮中心運行中...")
+    print("副業自動化指揮中心上線運作中...")
     app.run_polling()
 
 if __name__ == "__main__":
