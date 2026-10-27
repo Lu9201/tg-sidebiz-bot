@@ -64,9 +64,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "要求：核心目標是幫受眾『節省時間』或『提高工作/生活效率』，"
                 "且是能馬上落地的乾貨。請包含：題目、受眾痛點、預期定價（美元）、核心章節大綱。"
             )
-            # 使用非同步呼叫 aio
             response = await ai_client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=prompt
             )
             await query.message.reply_text(response.text, reply_markup=get_main_menu())
@@ -79,7 +78,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "讓讀者看完即可直接套用並省下工作時間。"
             )
             response = await ai_client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=prompt
             )
             await query.message.reply_text(response.text, reply_markup=get_main_menu())
@@ -94,7 +93,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "末尾附上引導購買數位商品的行動呼籲（CTA）。"
             )
             response = await ai_client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=prompt
             )
             await query.message.reply_text(response.text, reply_markup=get_main_menu())
