@@ -19,7 +19,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b"OK")
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -36,6 +36,27 @@ def get_main_menu():
 
 def is_authorized(user_id: int) -> bool:
     return user_id == ALLOWED_USER_ID
+
+# 呼叫 Gemini 的安全同步封裝
+def call_gemini(prompt: str) -> str:
+    response = ai_client.models.generate_content(
+        model="gemini-3.8-flash",
+        contents=prompt
+    )
+    return response.text
+
+# 處理 Telegram 訊息長度超過 4000 字元的分段發送輔助函數
+async def send_long_message(message_obj, text: str, reply_markup=None):
+    chunk_size = 3500
+    if len(text) <= chunk_size:
+        await message_obj.reply_text(text, reply_markup=reply_markup)
+    else:
+        chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+        for i, chunk in enumerate(chunks):
+            if i == len(chunks) - 1:
+                await message_obj.reply_text(chunk, reply_markup=reply_markup)
+            else:
+                await message_obj.reply_text(chunk)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
@@ -58,48 +79,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if data == "btn_idea":
-            await query.edit_message_text("🔍 正在分析高價值、幫使用者省時的數位商品題目...")
+            status_msg = await query.message.reply_text("🔍 正在分析高價值、幫讀者省時的數位商品題目...")
             prompt = (
-                "請為數位商品（電子書/SOP/範本手冊）構思 3 個高價值選題。"
-                "要求：核心目標是幫受眾『節省時間』或『提高工作/生活效率』，"
-                "且是能馬上落地的乾貨。請包含：題目、受眾痛點、預期定價（美元）、核心章節大綱。"
+                "請為數位商品（電子書/SOP/範本手冊）構思 3 個高價值選題。\n"
+                "核心標準：必須能幫受眾『節省時間』或『提高工作與生活效率』，實用性高。\n"
+                "請條列列出：題目名稱、核心目標客群痛點、建議定價（美元）、4 個核心實踐章節。"
             )
-            response = await ai_client.aio.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-            await query.message.reply_text(response.text, reply_markup=get_main_menu())
+            loop = asyncio.get_running_loop()
+            result_text = await loop.run_in_executor(None, call_gemini, prompt)
+            await status_msg.delete()
+            await send_long_message(query.message, result_text, get_main_menu())
 
         elif data == "btn_create_product":
-            await query.edit_message_text("✍️ 正在生成《高效個人知識庫與自動化 SOP》迷你實戰指南草稿...")
+            status_msg = await query.message.reply_text("✍️ 正在生成《高效個人知識庫與自動化 SOP》實戰指南草稿...")
             prompt = (
-                "請撰寫一份字數約 1200 字的迷你實用手冊：《30分鐘打造個人自動化工作流指南》。"
-                "內容要極度實用、條理分明、避免廢話，直接給出工具選型、操作步驟與示範，"
-                "讓讀者看完即可直接套用並省下工作時間。"
+                "請撰寫一份字數約 1200 字的實戰迷你手冊：《30分鐘打造個人自動化工作流指南》。\n"
+                "架構要求：\n"
+                "1. 前言：為什麼要自動化，能幫你省下多少時間？\n"
+                "2. 核心架構：選型說明（手機/通訊軟體 + 雲端自動化 + AI 大腦）。\n"
+                "3. 實作 SOP：3 個立即可套用的自動化場景步驟。\n"
+                "4. 避坑指南：新手最常踩的三個雷區。\n"
+                "文筆精煉、條理分明，不要無意義的套話。"
             )
-            response = await ai_client.aio.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-            await query.message.reply_text(response.text, reply_markup=get_main_menu())
+            loop = asyncio.get_running_loop()
+            result_text = await loop.run_in_executor(None, call_gemini, prompt)
+            await status_msg.delete()
+            await send_long_message(query.message, result_text, get_main_menu())
 
         elif data == "btn_marketing":
-            await query.edit_message_text("✍️ 正在產出適用於 Threads / X 的高互動引流貼文...")
+            status_msg = await query.message.reply_text("✍️ 正在產出適用於 Threads / X 的高轉換引流貼文...")
             prompt = (
-                "請依據《30分鐘打造個人自動化工作流指南》這款數位商品，"
-                "撰寫 2 篇 Threads 爆款鉤子（Hook）貼文："
-                "1. 一篇以痛點切入（每天加班/瑣事太多）。"
-                "2. 一篇以成果展示切入（如何用自動化解放時間）。"
-                "末尾附上引導購買數位商品的行動呼籲（CTA）。"
+                "請依據《30分鐘打造個人自動化工作流指南》這款數位商品，撰寫 2 篇社群高轉換貼文：\n"
+                "貼文 1（痛點切入）：針對被重複性瑣事纏身、沒時間做副業的上班族。\n"
+                "貼文 2（成果展示）：說明用手機 5 分鐘審核 AI 產出的流程與解放感。\n"
+                "每篇請包含吸睛開頭（Hook）、乾貨要點與明確的行動呼籲（CTA）。"
             )
-            response = await ai_client.aio.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-            await query.message.reply_text(response.text, reply_markup=get_main_menu())
+            loop = asyncio.get_running_loop()
+            result_text = await loop.run_in_executor(None, call_gemini, prompt)
+            await status_msg.delete()
+            await send_long_message(query.message, result_text, get_main_menu())
 
     except Exception as e:
-        await query.message.reply_text(f"⚠️ 發生錯誤：{str(e)}", reply_markup=get_main_menu())
+        await query.message.reply_text(f"⚠️ 執行發生異常：{str(e)}", reply_markup=get_main_menu())
 
 def main():
     threading.Thread(target=run_http_server, daemon=True).start()
