@@ -9,7 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from google import genai
 
-# 環境變數設定
+# ==================== 環境變數 ====================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "989667956"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -19,7 +19,7 @@ NOTION_PAGE_ID = os.environ.get("NOTION_PAGE_ID", "406ab074b50c80a291e2c5a073ebc
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# 歐美市場專屬高階人設
+# ==================== 系統人設 (歐美高單價全球市場) ====================
 SYSTEM_INSTRUCTION = (
     "You are an elite Digital Product Strategist and Automated Business Agent targeting the US/Global market.\n"
     "Your owner is Lucas. Your mission is to autonomously build full sales funnels: free lead magnets ($0), "
@@ -36,18 +36,28 @@ chat_session = ai_client.chats.create(
     config={"system_instruction": SYSTEM_INSTRUCTION}
 )
 
-# 偽裝 HTTP 伺服器供 Render 檢測 Port
-class SimpleHandler(BaseHTTPRequestHandler):
+# ==================== 強化版 HTTP 伺服器 (解決 Render 健康檢查卡住) ====================
+class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"OK")
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # 關閉連線 log，保持終端機乾淨
+
 def run_http_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
+# ==================== Telegram 選單與權限 ====================
 def get_main_menu():
     keyboard = [
         [InlineKeyboardButton("💡 推薦歐美高需求藍海選題", callback_data="btn_idea")],
@@ -60,7 +70,7 @@ def get_main_menu():
 def is_authorized(user_id: int) -> bool:
     return user_id == ALLOWED_USER_ID
 
-# 具備 503 重試與雙模型降級備援
+# ==================== Gemini 安全調用 (含 503 重試與備援) ====================
 def ask_gemini_safe(prompt_text: str) -> str:
     global chat_session
     models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
@@ -85,13 +95,14 @@ def ask_gemini_safe(prompt_text: str) -> str:
                         continue
                 else:
                     time.sleep(1)
+    # 最後備援單次呼叫
     res = ai_client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=prompt_text
     )
     return res.text
 
-# 呼叫 Notion 官方 API：自動配置 Cover 橫幅圖、Icon 圖標與精美排版
+# ==================== Notion 官方 API 建立頁面 (含 Cover 與 Icon) ====================
 def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoji: str = "⚡", cover_url: str = None) -> dict:
     if not NOTION_API_KEY:
         return {"success": False, "error": "尚未設定 NOTION_API_KEY"}
@@ -103,7 +114,6 @@ def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoj
         "Notion-Version": "2022-06-28"
     }
 
-    # 預設極簡商務/科技高解析度橫幅
     if not cover_url:
         cover_url = "https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?auto=format&fit=crop&w=1500&q=80"
 
@@ -165,7 +175,7 @@ def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoj
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# 呼叫 Gumroad API 自動建立商品
+# ==================== Gumroad API 自動上架商品 ====================
 def create_gumroad_product_sync(name: str, description: str, delivery_url: str, tags: list = None, price_cents: int = 999) -> dict:
     if not GUMROAD_ACCESS_TOKEN:
         return {"success": False, "error": "尚未設定 GUMROAD_ACCESS_TOKEN"}
@@ -198,6 +208,7 @@ def create_gumroad_product_sync(name: str, description: str, delivery_url: str, 
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+# ==================== 進度心跳回報與長文字切分 ====================
 async def run_with_progress_report(status_message, sync_task, initial_text="🧠 Agent 正在全自動調度中..."):
     await status_message.edit_text(initial_text)
     loop = asyncio.get_running_loop()
@@ -242,6 +253,7 @@ async def send_formatted_chunks(message_obj, full_text: str, reply_markup=None):
             await message_obj.reply_text(text_to_send)
             await asyncio.sleep(0.5)
 
+# ==================== 指令與訊息處理 ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
         await update.message.reply_text("⛔ 未授權存取。")
@@ -437,6 +449,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await query.message.reply_text(f"⚠️ 異常：{str(e)}", reply_markup=get_main_menu())
 
+# ==================== 主入口 ====================
 def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
