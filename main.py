@@ -1,14 +1,30 @@
 import os
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from google import genai
 
+# 環境變數設定
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ALLOWED_USER_ID = int(os.environ.get("ALLOWED_USER_ID", "989667956"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# 初始化 Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# 建立假 HTTP 伺服器供 Render 檢測 Port
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
 
 def get_main_menu():
     keyboard = [
@@ -82,6 +98,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(response.text, reply_markup=get_main_menu())
 
 def main():
+    # 啟動健康檢查伺服器
+    threading.Thread(target=run_http_server, daemon=True).start()
+    
+    # 啟動 Telegram Bot
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
