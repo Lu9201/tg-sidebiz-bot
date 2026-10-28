@@ -36,7 +36,7 @@ chat_session = ai_client.chats.create(
     config={"system_instruction": SYSTEM_INSTRUCTION}
 )
 
-# ==================== 強化版 HTTP 伺服器 (解決 Render 健康檢查卡住) ====================
+# ==================== HTTP 伺服器 (Render 健康檢查) ====================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -50,14 +50,14 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        pass  # 關閉連線 log，保持終端機乾淨
+        pass
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
     server.serve_forever()
 
-# ==================== Telegram 選單與權限 ====================
+# ==================== Telegram 選單 ====================
 def get_main_menu():
     keyboard = [
         [InlineKeyboardButton("💡 推薦歐美高需求藍海選題", callback_data="btn_idea")],
@@ -70,7 +70,7 @@ def get_main_menu():
 def is_authorized(user_id: int) -> bool:
     return user_id == ALLOWED_USER_ID
 
-# ==================== Gemini 安全調用 (含 503 重試與備援) ====================
+# ==================== Gemini 安全調用 ====================
 def ask_gemini_safe(prompt_text: str) -> str:
     global chat_session
     models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
@@ -95,21 +95,20 @@ def ask_gemini_safe(prompt_text: str) -> str:
                         continue
                 else:
                     time.sleep(1)
-    # 最後備援單次呼叫
     res = ai_client.models.generate_content(
         model="gemini-3.5-flash-lite",
         contents=prompt_text
     )
     return res.text
 
-# ==================== Notion 官方 API 建立頁面 (含 Cover 與 Icon) ====================
+# ==================== Notion 官方 API 建立頁面 ====================
 def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoji: str = "⚡", cover_url: str = None) -> dict:
     if not NOTION_API_KEY:
         return {"success": False, "error": "尚未設定 NOTION_API_KEY"}
 
     url = "https://api.notion.com/v1/pages"
     headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Authorization": f"Bearer {NOTION_API_KEY.strip()}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
@@ -147,7 +146,7 @@ def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoj
             blocks.append({"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": p[:2000]}}]}})
 
     payload = {
-        "parent": {"page_id": NOTION_PAGE_ID},
+        "parent": {"page_id": NOTION_PAGE_ID.strip()},
         "icon": {
             "type": "emoji",
             "emoji": icon_emoji
@@ -175,26 +174,29 @@ def create_notion_product_page_sync(title: str, content_markdown: str, icon_emoj
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ==================== Gumroad API 自動上架商品 ====================
+# ==================== Gumroad API 自動上架商品 (純淨 URL 修正) ====================
 def create_gumroad_product_sync(name: str, description: str, delivery_url: str, tags: list = None, price_cents: int = 999) -> dict:
     if not GUMROAD_ACCESS_TOKEN:
         return {"success": False, "error": "尚未設定 GUMROAD_ACCESS_TOKEN"}
     
-    url = "[https://api.gumroad.com/v2/products](https://api.gumroad.com/v2/products)"
+    # 確保使用乾淨的 URL 字串，絕不帶任何 markdown 括號
+    api_url = "[https://api.gumroad.com/v2/products](https://api.gumroad.com/v2/products)"
     full_desc = f"{description}\n\n---\n🎁 **Instant Access**: Upon purchase, duplicate your Notion Workspace here:\n{delivery_url}"
     
     payload = {
-        "access_token": GUMROAD_ACCESS_TOKEN,
+        "access_token": GUMROAD_ACCESS_TOKEN.strip(),
         "name": name,
         "price": price_cents,
         "description": full_desc,
         "require_shipping": "false"
     }
-    if tags:
-        payload["tags[]"] = tags
+    
+    if tags and isinstance(tags, list):
+        for idx, tag in enumerate(tags[:5]):
+            payload[f"tags[{idx}]"] = str(tag).strip()
 
     try:
-        res = requests.post(url, data=payload, timeout=25)
+        res = requests.post(api_url, data=payload, timeout=25)
         data = res.json()
         if data.get("success"):
             return {
@@ -208,7 +210,7 @@ def create_gumroad_product_sync(name: str, description: str, delivery_url: str, 
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ==================== 進度心跳回報與長文字切分 ====================
+# ==================== 心跳與長文字切分 ====================
 async def run_with_progress_report(status_message, sync_task, initial_text="🧠 Agent 正在全自動調度中..."):
     await status_message.edit_text(initial_text)
     loop = asyncio.get_running_loop()
@@ -259,8 +261,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ 未授權存取。")
         return
     await update.message.reply_text(
-        "👋 Lucas，全自動數位資產工廠（旗艦視覺化版）已就緒！\n"
-        "目前具備：【Notion Cover/Icon 自動生成】+【Gumroad 免費+付費雙版本自動上架】+【SEO Tags 自動注入】+【追銷信生成】。\n\n"
+        "👋 Lucas，全自動數位資產工廠已全線貫通！\n"
+        "目前具備：【Notion 封面/圖標自動建頁】+【Gumroad 免費+付費雙版本自動上架】+【SEO Tags 自動注入】+【追銷信生成】。\n\n"
         "你可以直接打字交代策略，或點擊下方按鈕啟動：",
         reply_markup=get_main_menu()
     )
@@ -371,7 +373,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "notion_markdown": "# Freelance OS\\n\\n### ⚡ Client Onboarding\\n- [ ] Send invoice\\n- [ ] Duplicate workspace"
                 }
 
-            # 1. 自動建 Notion 頁面（含封面與圖標）
+            # 1. 自動建立 Notion 頁面（含封面與圖標）
             notion_res = create_notion_product_page_sync(
                 title=pkg["paid_title"],
                 content_markdown=pkg["notion_markdown"],
@@ -382,7 +384,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return {"success": False, "error": f"Notion 頁面建立失敗: {notion_res.get('error')}"}
             delivery_url = notion_res["url"]
 
-            # 2. 自動建 $9.99 付費旗艦版（自動注入 Tags）
+            # 2. 自動建立 $9.99 付費旗艦版（自動注入 Tags）
             paid_gum = create_gumroad_product_sync(
                 name=pkg["paid_title"],
                 description=pkg["paid_sales_copy"],
@@ -393,7 +395,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not paid_gum.get("success"):
                 return {"success": False, "error": f"付費版上架失敗: {paid_gum.get('error')}"}
 
-            # 3. 自動建 $0 免費引流版（自動注入 Tags 並帶入付費版連結）
+            # 3. 自動建立 $0 免費引流版（自動注入 Tags 並帶入付費版連結）
             free_desc = f"{pkg['free_sales_copy']}\n\n👉 Upgrade to Full Version: {paid_gum['url']}"
             free_gum = create_gumroad_product_sync(
                 name=pkg["free_title"],
